@@ -31,10 +31,10 @@ function EthIcon({ size=18 }) {
 }
 
 const ASSETS = [
-  { code: 'USDT_BEP20', label: 'USDT (BEP20)', icon: UsdtIcon },
-  { code: 'USDT_TRC20', label: 'USDT (TRC20)', icon: UsdtIcon },
-  { code: 'BTC', label: 'BTC', icon: BtcIcon },
-  { code: 'ETH', label: 'ETH', icon: EthIcon }
+  { code: 'USDT_BEP20', label: 'USDT', sub: 'BEP20', icon: UsdtIcon },
+  { code: 'USDT_TRC20', label: 'USDT', sub: 'TRC20', icon: UsdtIcon },
+  { code: 'BTC',         label: 'BTC',  sub: '',      icon: BtcIcon  },
+  { code: 'ETH',         label: 'ETH',  sub: '',      icon: EthIcon  }
 ];
 
 export default function App() {
@@ -54,69 +54,36 @@ export default function App() {
   const [tab, setTab] = useState('client'); // client | operator
   const [quote, setQuote] = useState({ rub_amount: null, rate: null, loading: false });
   const [loading, setLoading] = useState(true);
-  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'night'); // 'night' | 'dawn'
 
   const headers = useMemo(
     () => ({ 'Content-Type': 'application/json', 'x-init-data': initData }),
     [initData]
   );
 
-  // Apply theme to <body>
-  useEffect(() => {
-    document.body.setAttribute('data-theme', theme);
-    localStorage.setItem('theme', theme);
-  }, [theme]);
-
-  // Particle background
-  useEffect(() => {
-    const c = document.getElementById('bg-canvas');
-    if (!c) return;
-    const ctx = c.getContext('2d');
-    let w, h, raf;
-    const DPR = Math.min(2, window.devicePixelRatio || 1);
-    const P = Array.from({ length: 40 }, () => ({
-      x: Math.random(), y: Math.random(),
-      r: 0.6 + Math.random() * 1.5,
-      s: 0.0007 + Math.random() * 0.0014
-    }));
-    const resize = () => {
-      w = c.offsetWidth; h = c.offsetHeight;
-      c.width = w * DPR; c.height = h * DPR; ctx.setTransform(DPR,0,0,DPR,0,0);
-    };
-    const tick = (t) => {
-      ctx.clearRect(0, 0, w, h);
-      for (const p of P) {
-        const x = (p.x + Math.sin(t * p.s) * 0.0015 + 1) % 1;
-        const y = (p.y + Math.cos(t * p.s) * 0.0015 + 1) % 1;
-        ctx.beginPath();
-        ctx.arc(x * w, y * h, p.r, 0, Math.PI * 2);
-        ctx.fillStyle = theme === 'night' ? 'rgba(200,161,90,0.08)' : 'rgba(255,214,153,0.10)';
-        ctx.shadowColor = theme === 'night' ? 'rgba(200,161,90,0.25)' : 'rgba(255,214,153,0.28)';
-        ctx.shadowBlur = 8;
-        ctx.fill();
-        ctx.shadowBlur = 0;
-      }
-      raf = requestAnimationFrame(tick);
-    };
-    resize();
-    window.addEventListener('resize', resize);
-    raf = requestAnimationFrame(tick);
-    return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', resize); };
-  }, [theme]);
-
   useEffect(() => { tg?.expand(); }, [tg]);
 
-  // Initial load with skeleton
+  // Fancy particles
+  useEffect(() => {
+    const c = document.getElementById('bg-canvas'); if (!c) return;
+    const ctx = c.getContext('2d');
+    let w,h,raf; const DPR=Math.min(2,window.devicePixelRatio||1);
+    const P = Array.from({length:40},()=>({x:Math.random(),y:Math.random(),r:.6+Math.random()*1.5,s:.0007+Math.random()*.0014}));
+    const resize=()=>{w=c.offsetWidth;h=c.offsetHeight;c.width=w*DPR;c.height=h*DPR;ctx.setTransform(DPR,0,0,DPR,0,0);};
+    const tick=t=>{ctx.clearRect(0,0,w,h);for(const p of P){const x=(p.x+Math.sin(t*p.s)*.0015+1)%1;const y=(p.y+Math.cos(t*p.s)*.0015+1)%1;ctx.beginPath();ctx.arc(x*w,y*h,p.r,0,Math.PI*2);ctx.fillStyle='rgba(200,161,90,0.08)';ctx.shadowColor='rgba(200,161,90,0.25)';ctx.shadowBlur=8;ctx.fill();ctx.shadowBlur=0;}raf=requestAnimationFrame(tick);};
+    resize(); window.addEventListener('resize',resize); raf=requestAnimationFrame(tick);
+    return ()=>{cancelAnimationFrame(raf);window.removeEventListener('resize',resize);};
+  },[]);
+
+  // Initial load
   useEffect(() => {
     (async () => {
       try {
-        const meRes = await fetch(`${backend}/api/me`, { headers });
-        const meJson = await meRes.json();
-        setMe(meJson);
-        const mine = await fetch(`${backend}/api/my-orders`, { headers }).then(r => r.json());
+        const me = await fetch(`${backend}/api/me`, { headers }).then(r=>r.json());
+        setMe(me);
+        const mine = await fetch(`${backend}/api/my-orders`, { headers }).then(r=>r.json());
         setMyOrders(mine);
-        if (meJson.role === 'operator') {
-          const all = await fetch(`${backend}/api/orders?status=${encodeURIComponent(filter)}`, { headers }).then(r => r.json());
+        if (me.role === 'operator') {
+          const all = await fetch(`${backend}/api/orders?status=${encodeURIComponent(filter)}`, { headers }).then(r=>r.json());
           setOpOrders(all);
         }
       } catch {
@@ -135,17 +102,11 @@ export default function App() {
     debounceRef.current = setTimeout(async () => {
       try {
         const a = Number(amount);
-        if (!a || a <= 0) {
-          setQuote({ rub_amount: null, rate: null, loading: false });
-          return;
-        }
-        const q = await fetch(`${backend}/api/quote?asset=${encodeURIComponent(asset)}&amount=${encodeURIComponent(a)}`, { headers })
-          .then(r => r.json());
+        if (!a || a <= 0) { setQuote({ rub_amount: null, rate: null, loading: false }); return; }
+        const q = await fetch(`${backend}/api/quote?asset=${encodeURIComponent(asset)}&amount=${encodeURIComponent(a)}`, { headers }).then(r=>r.json());
         if (q.error) throw new Error(q.error);
         setQuote({ rub_amount: q.rub_amount, rate: q.rate, loading: false });
-      } catch {
-        setQuote({ rub_amount: null, rate: null, loading: false });
-      }
+      } catch { setQuote({ rub_amount: null, rate: null, loading: false }); }
     }, 200);
     return () => clearTimeout(debounceRef.current);
   }, [asset, amount, backend, headers]);
@@ -163,18 +124,14 @@ export default function App() {
   async function setTxid(orderId) {
     const txid = window.prompt('Введите TXID/Hash перевода (необязательно)');
     if (txid === null) return;
-    await fetch(`${backend}/api/orders/${orderId}/txid`, {
-      method: 'POST', headers, body: JSON.stringify({ txid })
-    });
+    await fetch(`${backend}/api/orders/${orderId}/txid`, { method: 'POST', headers, body: JSON.stringify({ txid }) });
     const mine = await fetch(`${backend}/api/my-orders`, { headers }).then(r=>r.json());
     setMyOrders(mine);
   }
 
   async function opAction(orderId, status) {
     const comment = window.prompt('Комментарий (необязательно)');
-    await fetch(`${backend}/api/orders/${orderId}/status`, {
-      method: 'POST', headers, body: JSON.stringify({ status, comment })
-    });
+    await fetch(`${backend}/api/orders/${orderId}/status`, { method: 'POST', headers, body: JSON.stringify({ status, comment }) });
     const all = await fetch(`${backend}/api/orders?status=${encodeURIComponent(filter)}`, { headers }).then(r => r.json());
     setOpOrders(all);
   }
@@ -183,8 +140,6 @@ export default function App() {
     const u = initDataUnsafe?.user; if (!u) return 'гость';
     return u.first_name + (u.last_name ? ' ' + u.last_name : '');
   }, [initDataUnsafe]);
-
-  const ActiveIcon = (ASSETS.find(a => a.code === asset)?.icon) || (() => null);
 
   // 3D tilt for cards
   function useTilt() {
@@ -195,8 +150,8 @@ export default function App() {
         const r = el.getBoundingClientRect();
         const px = (e.clientX - r.left) / r.width;
         const py = (e.clientY - r.top) / r.height;
-        const rx = (py - 0.5) * 8;   // tilt X
-        const ry = (px - 0.5) * -8;  // tilt Y
+        const rx = (py - 0.5) * 8;
+        const ry = (px - 0.5) * -8;
         el.style.transform = `perspective(900px) rotateX(${rx}deg) rotateY(${ry}deg) translateZ(0)`;
       };
       const onLeave = () => { el.style.transform = ''; };
@@ -216,21 +171,35 @@ export default function App() {
     else window.open(url, '_blank');
   }
 
+  // Modern asset picker card
+  const AssetBtn = ({ a, active, onClick }) => {
+    const Icon = a.icon;
+    return (
+      <button
+        role="radio"
+        aria-checked={active}
+        className={`asset-btn ${active ? 'active' : ''}`}
+        onClick={onClick}
+      >
+        <span className="asset-ico"><Icon size={16}/></span>
+        <span className="asset-text">
+          <b>{a.label}</b>
+          {a.sub ? <small>{a.sub}</small> : null}
+        </span>
+      </button>
+    );
+  };
+
   return (
     <div className="screen">
       <canvas id="bg-canvas" className="bg"></canvas>
 
       <div className="topbar glass rise">
         <div className="brand">
-          <span className="logo">
-            <ActiveIcon size={16}/>
-          </span>
+          <span className="logo"><UsdtIcon size={16}/></span>
           <span>Top Crypto Exchange</span>
         </div>
         <div className="actions">
-          <button className="btn ghost" onClick={()=>setTheme(theme==='night'?'dawn':'night')}>
-            {theme === 'night' ? 'Gothic Dawn' : 'Gothic Night'}
-          </button>
           <button className="btn gold" onClick={openSupport}>Служба помощи</button>
           <span className="badge">Привет, {userName}</span>
         </div>
@@ -246,7 +215,6 @@ export default function App() {
         </div>
 
         {loading ? (
-          // Skeleton layout
           <div className="grid two">
             <div ref={tiltA} className="card glass section tilt">
               <div className="skeleton title-sk"></div>
@@ -267,15 +235,26 @@ export default function App() {
               <div className="grid two">
                 <div ref={tiltA} className="card glow section tilt">
                   <h3 className="title">Создать заявку</h3>
+
+                  {/* modern asset picker */}
+                  <div className="asset-picker" role="radiogroup" aria-label="Актив">
+                    <div className="asset-scroll">
+                      {ASSETS.map(a => (
+                        <AssetBtn
+                          key={a.code}
+                          a={a}
+                          active={asset===a.code}
+                          onClick={()=>setAsset(a.code)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
                   <div className="row" style={{margin:'8px 0'}}>
-                    <label className="muted">Актив</label>
-                    <select value={asset} onChange={e=>setAsset(e.target.value)}>
-                      {ASSETS.map(a => <option key={a.code} value={a.code}>{a.label}</option>)}
-                    </select>
                     <label className="muted">Сумма</label>
                     <input className="input" type="number" min="0" step="0.0001" value={amount}
-                      onChange={e=>setAmount(e.target.value)} style={{ width: 160 }} />
-                    <button className="btn gold pulse" onClick={createOrder}>Создать</button>
+                      onChange={e=>setAmount(e.target.value)} style={{ width: 180 }} />
+                    <button className="btn gold" onClick={createOrder}>Создать</button>
                   </div>
 
                   {/* Live quote */}
