@@ -1,5 +1,5 @@
 // frontend/src/App.jsx
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 function UsdtIcon({ size=18 }) {
   return (
@@ -25,7 +25,7 @@ function EthIcon({ size=18 }) {
       <path fill="#3C3C3B" d="M127.6 310.6l-.6.7v105l.6 1.7 127.7-180.1z"/>
       <path fill="#8C8C8C" d="M127.6 418v-107.5L0 237.9z"/>
       <path fill="#141414" d="M127.6 285.7l127.6-75-127.6-57.9z"/>
-      <path fill="#393939" d="M0 210.7l127.6 75v-132.9z"/>
+      <path fill="#393939" d="M0 210.7l127.6 75в-132.9z"/>
     </svg>
   );
 }
@@ -51,14 +51,53 @@ export default function App() {
   const [opOrders, setOpOrders] = useState([]);
   const [filter, setFilter] = useState('pending');
   const [tab, setTab] = useState('client'); // client | operator
+  const [quote, setQuote] = useState({ rub_amount: null, rate: null, loading: false });
 
   const headers = useMemo(
     () => ({ 'Content-Type': 'application/json', 'x-init-data': initData }),
     [initData]
   );
 
+  // Gorgeous subtle particle background
+  useEffect(() => {
+    const c = document.getElementById('bg-canvas');
+    if (!c) return;
+    const ctx = c.getContext('2d');
+    let w, h, raf;
+    const DPR = Math.min(2, window.devicePixelRatio || 1);
+    const P = Array.from({ length: 40 }, () => ({
+      x: Math.random(), y: Math.random(),
+      r: 0.6 + Math.random() * 1.5,
+      s: 0.0007 + Math.random() * 0.0014
+    }));
+    const resize = () => {
+      w = c.offsetWidth; h = c.offsetHeight;
+      c.width = w * DPR; c.height = h * DPR; ctx.scale(DPR, DPR);
+    };
+    const tick = (t) => {
+      ctx.clearRect(0, 0, w, h);
+      for (const p of P) {
+        const x = (p.x + Math.sin(t * p.s) * 0.0015 + 1) % 1;
+        const y = (p.y + Math.cos(t * p.s) * 0.0015 + 1) % 1;
+        ctx.beginPath();
+        ctx.arc(x * w, y * h, p.r, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(200,161,90,0.08)';
+        ctx.shadowColor = 'rgba(200,161,90,0.25)';
+        ctx.shadowBlur = 8;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    resize();
+    window.addEventListener('resize', resize);
+    raf = requestAnimationFrame(tick);
+    return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', resize); };
+  }, []);
+
   useEffect(() => { tg?.expand(); }, [tg]);
 
+  // Initial load
   useEffect(() => {
     (async () => {
       try {
@@ -70,11 +109,34 @@ export default function App() {
           const all = await fetch(`${backend}/api/orders?status=${encodeURIComponent(filter)}`, { headers }).then(r => r.json());
           setOpOrders(all);
         }
-      } catch (e) {
+      } catch {
         tg?.showAlert?.('Ошибка загрузки данных. Проверьте подключение.');
       }
     })();
   }, [backend, headers, filter]);
+
+  // Live quote (debounced)
+  const debounceRef = useRef(null);
+  useEffect(() => {
+    setQuote(q => ({ ...q, loading: true }));
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const a = Number(amount);
+        if (!a || a <= 0) {
+          setQuote({ rub_amount: null, rate: null, loading: false });
+          return;
+        }
+        const q = await fetch(`${backend}/api/quote?asset=${encodeURIComponent(asset)}&amount=${encodeURIComponent(a)}`, { headers })
+          .then(r => r.json());
+        if (q.error) throw new Error(q.error);
+        setQuote({ rub_amount: q.rub_amount, rate: q.rate, loading: false });
+      } catch {
+        setQuote({ rub_amount: null, rate: null, loading: false });
+      }
+    }, 200);
+    return () => clearTimeout(debounceRef.current);
+  }, [asset, amount, backend, headers]);
 
   async function createOrder() {
     const r = await fetch(`${backend}/api/orders`, {
@@ -110,115 +172,134 @@ export default function App() {
     return u.first_name + (u.last_name ? ' ' + u.last_name : '');
   }, [initDataUnsafe]);
 
-  const ActiveIcon = ASSETS.find(a => a.code === asset)?.icon || (() => null);
+  const ActiveIcon = (ASSETS.find(a => a.code === asset)?.icon) || (() => null);
 
   return (
-    <div className="container">
-      <div className="topbar">
+    <div className="screen">
+      <canvas id="bg-canvas" className="bg"></canvas>
+
+      <div className="topbar glass rise">
         <div className="brand">
-          <span style={{width:26,height:26,display:'inline-flex',alignItems:'center',justifyContent:'center',background:'#1d2430',border:'1px solid #2b3443',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,.35)'}}>
+          <span className="logo">
             <ActiveIcon size={16}/>
           </span>
-        <span>Top Crypto Exchange</span>
+          <span>Top Crypto Exchange</span>
         </div>
         <span className="badge">Привет, {userName}</span>
       </div>
 
-      {/* Табы */}
-      <div className="tabs">
-        <button className={`tab ${tab==='client'?'active':''}`} onClick={()=>setTab('client')}>Клиент</button>
-        {me?.role==='operator' && (
-          <button className={`tab ${tab==='operator'?'active':''}`} onClick={()=>setTab('operator')}>Оператор</button>
-        )}
-      </div>
+      <div className="container">
+        {/* Tabs */}
+        <div className="tabs">
+          <button className={`tab ${tab==='client'?'active':''}`} onClick={()=>setTab('client')}>Клиент</button>
+          {me?.role==='operator' && (
+            <button className={`tab ${tab==='operator'?'active':''}`} onClick={()=>setTab('operator')}>Оператор</button>
+          )}
+        </div>
 
-      {tab==='client' && (
-        <div className="grid two">
-          <div className="card section">
-            <h3 style={{marginTop:0}}>Создать заявку</h3>
-            <div className="row" style={{margin:'8px 0'}}>
-              <label className="muted">Актив</label>
-              <select value={asset} onChange={e=>setAsset(e.target.value)}>
-                {ASSETS.map(a => <option key={a.code} value={a.code}>{a.label}</option>)}
-              </select>
-              <label className="muted">Сумма</label>
-              <input className="input" type="number" min="0" step="0.0001" value={amount} onChange={e=>setAmount(e.target.value)} style={{ width: 160 }} />
-              <button className="btn" onClick={createOrder}>Создать</button>
-            </div>
-            {created && (
-              <div style={{marginTop:10}}>
-                <div className="divider"></div>
-                <div className="row" style={{gap:8, alignItems:'center'}}>
-                  <span className="status s-pending">● pending</span>
-                  <span className="chip">ID: {created.orderId}</span>
-                  <span className="chip">RUB: {created.rub_amount}</span>
+        {tab==='client' && (
+          <div className="grid two">
+            <div className="card glow section">
+              <h3 className="title">Создать заявку</h3>
+              <div className="row" style={{margin:'8px 0'}}>
+                <label className="muted">Актив</label>
+                <select value={asset} onChange={e=>setAsset(e.target.value)}>
+                  {ASSETS.map(a => <option key={a.code} value={a.code}>{a.label}</option>)}
+                </select>
+                <label className="muted">Сумма</label>
+                <input className="input" type="number" min="0" step="0.0001" value={amount}
+                  onChange={e=>setAmount(e.target.value)} style={{ width: 160 }} />
+                <button className="btn gold pulse" onClick={createOrder}>Создать</button>
+              </div>
+
+              {/* Live quote */}
+              <div className="quote">
+                <div className="muted">К зачислению (RUB)</div>
+                <div className={`quote-value ${quote.loading ? 'loading' : ''}`}>
+                  {quote.rub_amount !== null ? (
+                    <span>{quote.rub_amount}</span>
+                  ) : <span>—</span>}
                 </div>
-                <div className="list-item">
-                  <div className="muted">Отправьте на адрес</div>
-                  <div className="addr">{created.address}</div>
-                  <div style={{marginTop:8}}>
-                    <button className="btn" onClick={()=>setTxid(created.orderId)}>Указать TXID</button>
+                {quote.rate && (
+                  <div className="muted" style={{fontSize:12}}>Курс: {Math.round(quote.rate)}</div>
+                )}
+              </div>
+
+              {created && (
+                <div className="created fade-in">
+                  <div className="divider"></div>
+                  <div className="row" style={{gap:8, alignItems:'center'}}>
+                    <span className="status s-pending">● pending</span>
+                    <span className="chip">ID: {created.orderId}</span>
+                    <span className="chip">RUB: {created.rub_amount}</span>
+                  </div>
+                  <div className="list-item">
+                    <div className="muted">Отправьте на адрес</div>
+                    <div className="addr">{created.address}</div>
+                    <div style={{marginTop:8}}>
+                      <button className="btn" onClick={()=>setTxid(created.orderId)}>Указать TXID</button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
 
-          <div className="card section">
-            <h3 style={{marginTop:0}}>Мои заявки</h3>
-            {myOrders.length === 0 && <div className="muted">Пока пусто</div>}
-            {myOrders.map(o => (
-              <div key={o.id} className="list-item">
-                <div className="row" style={{justifyContent:'space-between'}}>
-                  <div><b>{o.asset}</b> • {o.amount} → {o.rub_amount} RUB</div>
-                  <div><span className={`status s-${o.status}`}>● {o.status}</span></div>
+            <div className="card glass section">
+              <h3 className="title">Мои заявки</h3>
+              {myOrders.length === 0 && <div className="muted">Пока пусто</div>}
+              {myOrders.map(o => (
+                <div key={o.id} className="list-item hover-rise">
+                  <div className="row" style={{justifyContent:'space-between'}}>
+                    <div><b>{o.asset}</b> • {o.amount} → {o.rub_amount} RUB</div>
+                    <div><span className={`status s-${o.status}`}>● {o.status}</span></div>
+                  </div>
+                  <div className="muted">ID: {o.id}</div>
+                  <div className="muted">Адрес: <span className="addr">{o.address}</span></div>
+                  <div className="muted">TXID: {o.txid || '—'}</div>
+                  <div style={{marginTop:6}}>
+                    <button className="btn" onClick={()=>setTxid(o.id)}>Изменить TXID</button>
+                  </div>
                 </div>
-                <div className="muted">ID: {o.id}</div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {tab==='operator' && me?.role==='operator' && (
+          <div className="card glow">
+            <div className="row" style={{justifyContent:'space-between'}}>
+              <h3 className="title">Оператор</h3>
+              <div>
+                <span className="muted">Фильтр:</span>{' '}
+                <select value={filter} onChange={e=>setFilter(e.target.value)}>
+                  <option value="pending">pending</option>
+                  <option value="paid">paid</option>
+                  <option value="released">released</option>
+                  <option value="cancelled">cancelled</option>
+                  <option value="">все</option>
+                </select>
+              </div>
+            </div>
+            {opOrders.length === 0 && <div className="muted" style={{marginTop:8}}>Нет заявок</div>}
+            {opOrders.map(o => (
+              <div key={o.id} className="list-item hover-rise">
+                <div className="row" style={{justifyContent:'space-between'}}>
+                  <div><b>{o.id}</b> • uid {o.user_id}</div>
+                  <span className={`status s-${o.status}`}>● {o.status}</span>
+                </div>
+                <div className="muted">{o.asset} • {o.amount} → {o.rub_amount} RUB • rate {Math.round(o.rate)}</div>
                 <div className="muted">Адрес: <span className="addr">{o.address}</span></div>
                 <div className="muted">TXID: {o.txid || '—'}</div>
-                <div style={{marginTop:6}}>
-                  <button className="btn" onClick={()=>setTxid(o.id)}>Изменить TXID</button>
+                <div className="row" style={{marginTop:6}}>
+                  <button className="btn" onClick={()=>opAction(o.id,'paid')}>Отметить «Получено»</button>
+                  <button className="btn" onClick={()=>opAction(o.id,'released')}>Выдать RUB</button>
+                  <button className="btn" onClick={()=>opAction(o.id,'cancelled')}>Отменить</button>
                 </div>
               </div>
             ))}
           </div>
-        </div>
-      )}
-
-      {tab==='operator' && me?.role==='operator' && (
-        <div className="card">
-          <div className="row" style={{justifyContent:'space-between'}}>
-            <h3 style={{margin:0}}>Оператор</h3>
-            <div>
-              <span className="muted">Фильтр:</span>{' '}
-              <select value={filter} onChange={e=>setFilter(e.target.value)}>
-                <option value="pending">pending</option>
-                <option value="paid">paid</option>
-                <option value="released">released</option>
-                <option value="cancelled">cancelled</option>
-                <option value="">все</option>
-              </select>
-            </div>
-          </div>
-          {opOrders.length === 0 && <div className="muted" style={{marginTop:8}}>Нет заявок</div>}
-          {opOrders.map(o => (
-            <div key={o.id} className="list-item">
-              <div className="row" style={{justifyContent:'space-between'}}>
-                <div><b>{o.id}</b> • uid {o.user_id}</div>
-                <span className={`status s-${o.status}`}>● {o.status}</span>
-              </div>
-              <div className="muted">{o.asset} • {o.amount} → {o.rub_amount} RUB • rate {Math.round(o.rate)}</div>
-              <div className="muted">Адрес: <span className="addr">{o.address}</span></div>
-              <div className="muted">TXID: {o.txid || '—'}</div>
-              <div className="row" style={{marginTop:6}}>
-                <button className="btn" onClick={()=>opAction(o.id,'paid')}>Отметить «Получено»</button>
-                <button className="btn" onClick={()=>opAction(o.id,'released')}>Выдать RUB</button>
-                <button className="btn" onClick={()=>opAction(o.id,'cancelled')}>Отменить</button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
