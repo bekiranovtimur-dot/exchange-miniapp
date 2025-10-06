@@ -1,165 +1,65 @@
-// src/App.jsx
 import React, { useEffect, useMemo, useState } from 'react';
 
+
 const ASSETS = [
-  { code: 'USDT_BEP20', label: 'USDT (BEP20)' },
-  { code: 'USDT_TRC20', label: 'USDT (TRC20)' },
-  { code: 'BTC', label: 'BTC' },
-  { code: 'ETH', label: 'ETH' }
+{ code: 'USDT_BEP20', label: 'USDT (BEP20)', icon: UsdtIcon },
+{ code: 'USDT_TRC20', label: 'USDT (TRC20)', icon: UsdtIcon },
+{ code: 'BTC', label: 'BTC', icon: BtcIcon },
+{ code: 'ETH', label: 'ETH', icon: EthIcon }
 ];
 
+
+function UsdtIcon({ size=18 }) {
+return (
+<svg width={size} height={size} viewBox="0 0 256 256" fill="none" aria-hidden>
+<circle cx="128" cy="128" r="128" fill="#26A17B"/>
+<path fill="#fff" d="M57 77h142v22h-53v17.4c36 2.8 60 10.4 60 19.6 0 11.3-37.7 20.5-84 20.5s-84-9.2-84-20.5c0-9.2 24-16.8 60-19.6V99H57V77zm71 78c41.5 0 63.7-5.8 70.8-9.2-7.1-3.4-29.3-9.2-70.8-9.2s-63.7 5.8-70.8 9.2c7.1 3.4 29.3 9.2 70.8 9.2z"/>
+</svg>
+);
+}
+function BtcIcon({ size=18 }) {
+return (
+<svg width={size} height={size} viewBox="0 0 32 32" aria-hidden>
+<circle cx="16" cy="16" r="16" fill="#F7931A"/>
+<path fill="#fff" d="M18.7 14.2c1-.6 1.6-1.5 1.5-2.9-.2-2-1.9-2.7-4.1-2.9V5.3h-2v3H12v-3H10v3H7v2h3v6H7v2h3v3h2v-3h1.2v3h2v-3.2c2.7-.2 4.4-1.1 4.5-3.2.1-1.4-.5-2.3-2-2.9ZM14 9.5h2c1.3 0 2 .4 2 1.4 0 1-.8 1.5-2.2 1.5H14V9.5Zm1.9 8.4H14v-3h2c1.6 0 2.4.5 2.4 1.5 0 1.1-.8 1.5-2.5 1.5Z"/>
+</svg>
+);
+}
+function EthIcon({ size=18 }) {
+return (
+<svg width={size} height={size} viewBox="0 0 256 417" aria-hidden>
+<path fill="#343434" d="M127.6 0l-1 5.7v279.1l1 .9 127.6-75z"/>
+<path fill="#8C8C8C" d="M127.6 0L0 210.7l127.6 75V0z"/>
+<path fill="#3C3C3B" d="M127.6 310.6l-.6.7v105l.6 1.7 127.7-180.1z"/>
+<path fill="#8C8C8C" d="M127.6 418v-107.5L0 237.9z"/>
+<path fill="#141414" d="M127.6 285.7l127.6-75-127.6-57.9z"/>
+<path fill="#393939" d="M0 210.7l127.6 75v-132.9z"/>
+</svg>
+);
+}
+
+
 export default function App() {
-  const tg = window.Telegram?.WebApp;
-  const initData = tg?.initData || '';
-  const initDataUnsafe = tg?.initDataUnsafe || {};
-  const backend = import.meta.env.VITE_BACKEND_URL || 'https://your-backend.example';
+const tg = window.Telegram?.WebApp;
+const initData = tg?.initData || '';
+const initDataUnsafe = tg?.initDataUnsafe || {};
+const backend = import.meta.env.VITE_BACKEND_URL || 'https://your-backend.example';
 
-  const [me, setMe] = useState(null);
-  const [asset, setAsset] = useState(ASSETS[0].code);
-  const [amount, setAmount] = useState('100');
-  const [created, setCreated] = useState(null);
-  const [myOrders, setMyOrders] = useState([]);
-  const [opOrders, setOpOrders] = useState([]);
-  const [filter, setFilter] = useState('pending');
 
-  const headers = useMemo(() => ({
-    'Content-Type': 'application/json',
-    'x-init-data': initData
-  }), [initData]);
+const [me, setMe] = useState(null);
+const [asset, setAsset] = useState(ASSETS[0].code);
+const [amount, setAmount] = useState('100');
+const [created, setCreated] = useState(null);
+const [myOrders, setMyOrders] = useState([]);
+const [opOrders, setOpOrders] = useState([]);
+const [filter, setFilter] = useState('pending');
+const [tab, setTab] = useState('client'); // client | operator
 
-  useEffect(() => { tg?.expand(); }, [tg]);
 
-  useEffect(() => {
-    (async () => {
-      const me = await fetch(`${backend}/api/me`, { headers }).then(r=>r.json());
-      setMe(me);
-      const mine = await fetch(`${backend}/api/my-orders`, { headers }).then(r=>r.json());
-      setMyOrders(mine);
-      if (me.role === 'operator') {
-        const all = await fetch(`${backend}/api/orders?status=${encodeURIComponent(filter)}`, { headers }).then(r=>r.json());
-        setOpOrders(all);
-      }
-    })();
-  }, [backend, headers, filter]);
+const headers = useMemo(() => ({ 'Content-Type': 'application/json', 'x-init-data': initData }), [initData]);
 
-  async function createOrder() {
-    const r = await fetch(`${backend}/api/orders`, {
-      method: 'POST', headers,
-      body: JSON.stringify({ asset, amount: Number(amount) })
-    }).then(r=>r.json());
-    if (r.error) return tg?.showAlert('Ошибка: ' + r.error);
-    setCreated(r);
-    const mine = await fetch(`${backend}/api/my-orders`, { headers }).then(r=>r.json());
-    setMyOrders(mine);
-  }
 
-  async function setTxid(orderId) {
-    const txid = window.prompt('Введите TXID/Hash перевода (необязательно)');
-    if (txid === null) return;
-    await fetch(`${backend}/api/orders/${orderId}/txid`, {
-      method: 'POST', headers, body: JSON.stringify({ txid })
-    });
-    const mine = await fetch(`${backend}/api/my-orders`, { headers }).then(r=>r.json());
-    setMyOrders(mine);
-  }
+useEffect(() => { tg?.expand(); }, [tg]);
 
-  async function opAction(orderId, status) {
-    const comment = window.prompt('Комментарий (необязательно)');
-    await fetch(`${backend}/api/orders/${orderId}/status`, {
-      method: 'POST', headers, body: JSON.stringify({ status, comment })
-    });
-    const all = await fetch(`${backend}/api/orders?status=${encodeURIComponent(filter)}`, { headers }).then(r=>r.json());
-    setOpOrders(all);
-  }
 
-  const userName = useMemo(() => {
-    const u = initDataUnsafe?.user; if (!u) return 'гость';
-    return u.first_name + (u.last_name ? ' ' + u.last_name : '');
-  }, [initDataUnsafe]);
-
-  return (
-    <div style={{ padding: 16, fontFamily: 'system-ui, sans-serif' }}>
-      <h2>Обмен • Привет, {userName}!</h2>
-      {me && (
-        <div style={{ marginBottom: 12, fontSize: 12, opacity: 0.8 }}>
-          Роль: <b>{me.role}</b>
-        </div>
-      )}
-
-      {/* Клиентская форма */}
-      <div style={{ border: '1px solid #ddd', borderRadius: 12, padding: 12, marginBottom: 16 }}>
-        <h3>Создать заявку</h3>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <label>Актив:</label>
-          <select value={asset} onChange={e=>setAsset(e.target.value)}>
-            {ASSETS.map(a => <option key={a.code} value={a.code}>{a.label}</option>)}
-          </select>
-          <label>Сумма:</label>
-          <input type="number" min="0" step="0.0001" value={amount}
-                 onChange={e=>setAmount(e.target.value)} style={{ width: 140 }} />
-          <button onClick={createOrder}>Создать</button>
-        </div>
-        {created && (
-          <div style={{ marginTop: 12, background: '#fafafa', padding: 12, borderRadius: 8 }}>
-            <div><b>Заявка:</b> {created.orderId}</div>
-            <div><b>Отправьте на адрес:</b> {created.address}</div>
-            <div><b>К зачислению (RUB):</b> {created.rub_amount}</div>
-            <div><b>Статус:</b> {created.status}</div>
-            <div style={{ marginTop: 8 }}>
-              <button onClick={()=>setTxid(created.orderId)}>Указать TXID</button>
-            </div>
-            <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
-              Важно: переведите ровно указанную сумму. Учтите комиссию сети.
-              После поступления средств оператор подтвердит и выдаст RUB.
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Мои заявки */}
-      <div style={{ border: '1px solid #ddd', borderRadius: 12, padding: 12, marginBottom: 16 }}>
-        <h3>Мои заявки</h3>
-        {myOrders.length === 0 && <div>Пока пусто</div>}
-        {myOrders.map(o => (
-          <div key={o.id} style={{ borderTop: '1px dashed #ddd', paddingTop: 8, marginTop: 8 }}>
-            <div><b>{o.id}</b> • {o.asset} • {o.amount} → {o.rub_amount} RUB</div>
-            <div>Адрес: {o.address}</div>
-            <div>Статус: <b>{o.status}</b>{o.comment ? ` • ${o.comment}` : ''}</div>
-            <div>TXID: {o.txid || '—'}</div>
-            <button onClick={()=>setTxid(o.id)}>Изменить TXID</button>
-          </div>
-        ))}
-      </div>
-
-      {/* Панель оператора */}
-      {me?.role === 'operator' && (
-        <div style={{ border: '2px solid #86b7fe', borderRadius: 12, padding: 12 }}>
-          <h3>Оператор</h3>
-          <div style={{ marginBottom: 8 }}>
-            Фильтр статуса:
-            <select value={filter} onChange={e=>setFilter(e.target.value)} style={{ marginLeft: 8 }}>
-              <option value="pending">pending</option>
-              <option value="paid">paid</option>
-              <option value="released">released</option>
-              <option value="cancelled">cancelled</option>
-              <option value="">все</option>
-            </select>
-          </div>
-          {opOrders.length === 0 && <div>Нет заявок</div>}
-          {opOrders.map(o => (
-            <div key={o.id} style={{ borderTop: '1px dashed #ddd', paddingTop: 8, marginTop: 8 }}>
-              <div><b>{o.id}</b> • uid {o.user_id} • {o.asset} • {o.amount} → {o.rub_amount} RUB</div>
-              <div>Адрес: {o.address} • TXID: {o.txid || '—'}</div>
-              <div>Статус: <b>{o.status}</b>{o.comment ? ` • ${o.comment}` : ''}</div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
-                <button onClick={()=>opAction(o.id,'paid')}>Отметить «Получено»</button>
-                <button onClick={()=>opAction(o.id,'released')}>Выдать RUB</button>
-                <button onClick={()=>opAction(o.id,'cancelled')}>Отменить</button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
