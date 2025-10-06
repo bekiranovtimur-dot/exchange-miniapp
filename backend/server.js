@@ -8,6 +8,7 @@ import {
   listOrders,
   getOrder,
   updateOrder,
+  ensureMigrations,   // ⬅️ добавим в db.js (см. ниже)
 } from './db.js';
 
 dotenv.config();
@@ -15,7 +16,7 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// Лог всех запросов
+// Лог запросов
 app.use((req, _res, next) => {
   console.log(req.method, req.url);
   next();
@@ -36,6 +37,9 @@ const {
   ADMIN_CHAT_ID,
   BACKEND_PUBLIC_NAME,
 } = process.env;
+
+// Список допустимых способов получения RUB:
+const RECEIVE_METHODS = new Set(['TINKOFF', 'SBER', 'ALFA', 'CASH']);
 
 // Утилиты
 const operatorIds = new Set(
@@ -60,9 +64,9 @@ function toCSV(rows) {
   return head + '\n' + body;
 }
 
-// === CORS (на проде лучше ограничить доменом фронта) ===
+// === CORS ===
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*'); // TODO: поставить домен Vercel
+  res.setHeader('Access-Control-Allow-Origin', '*'); // PROD: ограничить доменом фронта
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-init-data');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
@@ -102,6 +106,9 @@ function requireAuth(req, res, next) {
 // Health (без auth)
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
+// Запускаем миграции (добавит колонку receive_method при первом старте)
+ensureMigrations?.();
+
 // Дальше — защищённые маршруты
 app.use(requireAuth);
 
@@ -113,7 +120,7 @@ const ADDRESSES = {
   ETH: WALLET_ETH,
 };
 
-// Котировка (заглушка). На проде подтягивайте реальные курсы.
+// Котировка (заглушка)
 function quote(asset, amount) {
   const base = Number(BASE_RUB_PER_USD || 95); // RUB/USD
   const spread = Number(SPREAD_PCT || 1) / 100;
@@ -130,7 +137,7 @@ app.get('/api/me', (req, res) => {
   res.json({ id: req.user.id, role: req.user.role, addresses: ADDRESSES });
 });
 
-// Новый эндпоинт: онлайн-квота (для live-пересчёта на фронте)
+// ONLINE QUOTE
 app.get('/api/quote', (req, res) => {
   const asset = String(req.query.asset || '');
   const amount = Number(req.query.amount || 0);
@@ -144,9 +151,10 @@ app.get('/api/quote', (req, res) => {
   res.json({ rub_amount: Math.round(rubAmount*100)/100, rate });
 });
 
-// Создание заявки
+// Создание заявки (+ receive_method)
 app.post('/api/orders', async (req, res) => {
-  const { asset, amount, txid } = req.body || {};
+  const { asset, amount, txid, receive_method } = req.body || {};
+
   if (!['USDT_BEP20', 'USDT_TRC20', 'BTC', 'ETH'].includes(asset)) {
     return res.status(400).json({ error: 'invalid asset' });
   }
@@ -154,6 +162,15 @@ app.post('/api/orders', async (req, res) => {
   if (!amt || amt <= 0) {
     return res.status(400).json({ error: 'invalid amount' });
   }
+
+  // receive_method: валидируем, но делаем необязательным (на будущее)
+  let method = (receive_method || '').toString().toUpperCase().trim();
+  if (method && !RECEIVE_METHODS.has(method)) {
+    return res.status(400).json({ error: 'invalid receive_method' });
+  }
+  // Если твоему процессу обязательно нужен метод — раскомментируй:
+  // if (!method) return res.status(400).json({ error: 'receive_method required' });
+
   const address = ADDRESSES[asset];
   if (!address) {
     return res.status(400).json({ error: 'no address for asset' });
@@ -174,6 +191,7 @@ app.post('/api/orders', async (req, res) => {
     address,
     txid: txid || null,
     comment: null,
+    receive_method: method || null,   // ⬅️ сохраняем
     created_at: now,
     updated_at: now,
   });
@@ -185,13 +203,15 @@ app.post('/api/orders', async (req, res) => {
     address,
     rub_amount: Math.round(rubAmount * 100) / 100,
     rate,
+    receive_method: method || null,
   });
 
-  // Уведомление в канал/чат: добавили @username
+  // Уведомление в канал/чат (+ @username + receive_method)
   try {
     if (ADMIN_CHAT_ID && BOT_TOKEN) {
       const title = BACKEND_PUBLIC_NAME ? `<b>${safe(BACKEND_PUBLIC_NAME)}</b>\n` : '';
       const uname = req.user.username ? '@' + req.user.username : '(без username)';
+      const methodText = method ? method : '—';
       const text =
         `${title}🆕 <b>Новая заявка</b>\n` +
         `<b>ID:</b> ${id}\n` +
@@ -199,7 +219,8 @@ app.post('/api/orders', async (req, res) => {
         `<b>Актив:</b> ${asset}\n` +
         `<b>Сумма:</b> ${amt}\n` +
         `<b>RUB к выдаче:</b> ${Math.round(rubAmount * 100) / 100}\n` +
-        `<b>Адрес:</b> <code>${address}</code>`;
+        `<b>Получаю (RUB):</b> ${methodText}\n` +
+        `<b>Адрес для приёма:</b> <code>${address}</code>`;
 
       await fetch(BOT_API(BOT_TOKEN, 'sendMessage'), {
         method: 'POST',
@@ -252,11 +273,15 @@ app.post('/api/orders/:id/txid', (req, res) => {
   res.json({ ok: true });
 });
 
-// Экспорт CSV (оператор)
+// Экспорт CSV (оператор) — добавлен receive_method
 app.get('/api/export.csv', (req, res) => {
   if (req.user.role !== 'operator') return res.status(403).send('forbidden');
   const status = req.query.status || undefined;
-  const rows = listOrders({ status, limit: 1000 });
+  const rows = listOrders({ status, limit: 1000 })
+    .map(r => ({
+      ...r,
+      receive_method: r.receive_method || '', // колонка в CSV
+    }));
   const csv = toCSV(rows);
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="orders.csv"');
