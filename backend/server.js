@@ -16,6 +16,12 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
+// лог всех запросов
+app.use((req, res, next) => {
+  console.log(req.method, req.url);
+  next();
+});
+
 // === Env & config ===
 const {
   BOT_TOKEN,
