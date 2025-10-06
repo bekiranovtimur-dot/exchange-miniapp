@@ -15,7 +15,7 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// Логи запросов
+// Лог всех запросов
 app.use((req, _res, next) => {
   console.log(req.method, req.url);
   next();
@@ -37,6 +37,7 @@ const {
   BACKEND_PUBLIC_NAME,
 } = process.env;
 
+// Утилиты
 const operatorIds = new Set(
   String(OPERATORS || '')
     .split(',')
@@ -59,19 +60,16 @@ function toCSV(rows) {
   return head + '\n' + body;
 }
 
-// CORS (на проде ограничь доменом фронта)
+// === CORS (на проде лучше ограничить доменом фронта) ===
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*'); // TODO: заменить на домен Vercel
+  res.setHeader('Access-Control-Allow-Origin', '*'); // TODO: поставить домен Vercel
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-init-data');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
 
-// Healthcheck
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
-
-// === Auth ===
+// === Auth middleware ===
 function requireAuth(req, res, next) {
   const initData = req.header('x-init-data') || req.body?.initData;
   if (!initData) {
@@ -80,7 +78,7 @@ function requireAuth(req, res, next) {
   }
   const ok = checkTelegramAuth(initData, BOT_TOKEN);
   if (!ok) {
-    console.log('AUTH ERR: initData invalid (token mismatch?)');
+    console.log('AUTH ERR: initData invalid (token?)');
     return res.status(401).json({ error: 'initData invalid' });
   }
   const unsafe = Object.fromEntries(new URLSearchParams(initData));
@@ -101,7 +99,13 @@ function requireAuth(req, res, next) {
   next();
 }
 
-// Кошельки
+// Health (без auth)
+app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
+// Дальше — защищённые маршруты
+app.use(requireAuth);
+
+// Кошельки для приёма
 const ADDRESSES = {
   USDT_BEP20: WALLET_USDT_BEP20,
   USDT_TRC20: WALLET_USDT_TRC20,
@@ -109,7 +113,7 @@ const ADDRESSES = {
   ETH: WALLET_ETH,
 };
 
-// Котировка (заглушка)
+// Котировка (заглушка). На проде подтягивайте реальные курсы.
 function quote(asset, amount) {
   const base = Number(BASE_RUB_PER_USD || 95); // RUB/USD
   const spread = Number(SPREAD_PCT || 1) / 100;
@@ -121,34 +125,39 @@ function quote(asset, amount) {
   return { rubAmount, rate: rubRate };
 }
 
-// === Защищённые маршруты
-app.use(requireAuth);
-
-// info
+// Текущий пользователь / роль / кошельки
 app.get('/api/me', (req, res) => {
-  res.json({ id: req.user.id, role: req.user.role, username: req.user.username, addresses: ADDRESSES });
+  res.json({ id: req.user.id, role: req.user.role, addresses: ADDRESSES });
 });
 
-// МГНОВЕННЫЙ КОТИРОВЩИК для фронта
+// Новый эндпоинт: онлайн-квота (для live-пересчёта на фронте)
 app.get('/api/quote', (req, res) => {
   const asset = String(req.query.asset || '');
   const amount = Number(req.query.amount || 0);
-  if (!['USDT_BEP20', 'USDT_TRC20', 'BTC', 'ETH'].includes(asset))
+  if (!['USDT_BEP20','USDT_TRC20','BTC','ETH'].includes(asset)) {
     return res.status(400).json({ error: 'invalid asset' });
-  if (!amount || amount <= 0) return res.status(400).json({ error: 'invalid amount' });
+  }
+  if (!amount || amount <= 0) {
+    return res.status(400).json({ error: 'invalid amount' });
+  }
   const { rubAmount, rate } = quote(asset, amount);
-  res.json({ rub_amount: Math.round(rubAmount * 100) / 100, rate });
+  res.json({ rub_amount: Math.round(rubAmount*100)/100, rate });
 });
 
 // Создание заявки
 app.post('/api/orders', async (req, res) => {
   const { asset, amount, txid } = req.body || {};
-  if (!['USDT_BEP20', 'USDT_TRC20', 'BTC', 'ETH'].includes(asset))
+  if (!['USDT_BEP20', 'USDT_TRC20', 'BTC', 'ETH'].includes(asset)) {
     return res.status(400).json({ error: 'invalid asset' });
+  }
   const amt = Number(amount);
-  if (!amt || amt <= 0) return res.status(400).json({ error: 'invalid amount' });
+  if (!amt || amt <= 0) {
+    return res.status(400).json({ error: 'invalid amount' });
+  }
   const address = ADDRESSES[asset];
-  if (!address) return res.status(400).json({ error: 'no address for asset' });
+  if (!address) {
+    return res.status(400).json({ error: 'no address for asset' });
+  }
 
   const { rubAmount, rate } = quote(asset, amt);
   const id = 'ord_' + Math.random().toString(36).slice(2, 10);
@@ -169,6 +178,7 @@ app.post('/api/orders', async (req, res) => {
     updated_at: now,
   });
 
+  // Ответ клиенту
   res.json({
     orderId: id,
     status: 'pending',
@@ -177,15 +187,15 @@ app.post('/api/orders', async (req, res) => {
     rate,
   });
 
-  // Уведомление в канал/чат с @username
+  // Уведомление в канал/чат: добавили @username
   try {
     if (ADMIN_CHAT_ID && BOT_TOKEN) {
       const title = BACKEND_PUBLIC_NAME ? `<b>${safe(BACKEND_PUBLIC_NAME)}</b>\n` : '';
-      const nick = req.user.username ? `@${req.user.username}` : `(uid ${req.user.id})`;
+      const uname = req.user.username ? '@' + req.user.username : '(без username)';
       const text =
         `${title}🆕 <b>Новая заявка</b>\n` +
         `<b>ID:</b> ${id}\n` +
-        `<b>Пользователь:</b> ${nick}\n` +
+        `<b>Пользователь:</b> <code>${req.user.id}</code> ${uname}\n` +
         `<b>Актив:</b> ${asset}\n` +
         `<b>Сумма:</b> ${amt}\n` +
         `<b>RUB к выдаче:</b> ${Math.round(rubAmount * 100) / 100}\n` +
@@ -207,7 +217,7 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
-// Мои заявки
+// Мои заявки (клиент)
 app.get('/api/my-orders', (req, res) => {
   res.json(listOrders({ user_id: req.user.id, limit: 100 }));
 });
@@ -232,7 +242,7 @@ app.post('/api/orders/:id/status', (req, res) => {
   res.json({ ok: true });
 });
 
-// Клиент меняет TXID
+// Клиент добавляет/меняет TXID
 app.post('/api/orders/:id/txid', (req, res) => {
   const { id } = req.params;
   const { txid } = req.body || {};
@@ -253,5 +263,8 @@ app.get('/api/export.csv', (req, res) => {
   res.send(csv);
 });
 
+// Запуск
 const listenPort = Number(PORT || 8080);
-app.listen(listenPort, () => console.log('Backend on', listenPort));
+app.listen(listenPort, () => {
+  console.log('Backend on', listenPort);
+});
